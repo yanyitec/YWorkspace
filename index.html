@@ -4,13 +4,62 @@
         <meta charset="utf-8">
         <script type="text/javascript" src="lib/workspace.js"></script>
         <style type="text/css">
+.bg-red{
+    background-color:red;
+}
+.bg-green{
+    background-color:green;
+}
+.bg-orange{
+    background-color:orange;
+}
+.bg-blue{
+    background-color:blue;
+}
+.bg-blue{
+    background-color:black;
+}
+.bg-gray{
+    background-color:gray;
+}
+.bg-light-gray{
+    background-color:#cccccc;
+}
         </style>
     </head>
     <body>
-        <div id="demo"></div>
+        <div id="demo" style="width:800px;height:500px;border:1px solid black;"></div>
         <script>
-            
-		
+var cfg = {
+    className:"bg-light-gray",
+    width:500,
+    height:400,
+    ".head":{
+        className:"bg-red",
+        width:100,
+        height:50,
+        dock:"top"
+    },
+    ".menu":{
+        className:"bg-orange",
+        width:100,
+        height:30,
+        dock:"top"
+    },
+    ".quick":{
+        className:"bg-green",
+        width:50,
+        height:80,
+        dock:"left"
+    },
+    ".status":{
+        className:"bg-gray",
+        width:100,
+        height:80,
+        dock:"bottom"
+    }
+};            
+YA.component(cfg,document.getElementById("demo"));		
         </script>
     </body>
 </html>
