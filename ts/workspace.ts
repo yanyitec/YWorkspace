@@ -43,35 +43,35 @@ namespace YA{
                 argList += "arg"+i;
             }
             let code = `var handlers = [];
-var funcs = function(${argList}){
-    var result;
-    for(let i=0,j=handlers.length;i<j;i++){
-        let handler = handlers[i];
-        if(ck){
-            handler = ck(func);
-            if(!handler) continue;
-        }
-        let rs = handler(${argList});
-        if(rs!==undefined){
-            result = rs;
-            if(rs===false)break;
-        }
-    }
-    return result;
-};
-funcs.__YA_FUNCS_HANLDERS = handlers;
-funcs.add(handler){
-    handlers.push(handler);
-}
-funcs.remove(handler){
-    for(var i=0,j=handlers.length;i<j;i++){
-        var existed = handlers.shift();
-        if(existed !==handler && (eq ?!dq(handler,existed):true){
-            continue;
-        }
-    }
-}
-return funcs;
+            var funcs = function(${argList}){
+                var result;
+                for(let i=0,j=handlers.length;i<j;i++){
+                    let handler = handlers[i];
+                    if(ck){
+                        handler = ck(handler);
+                        if(!handler) continue;
+                    }
+                    let rs = handler(${argList});
+                    if(rs!==undefined){
+                        result = rs;
+                        if(rs===false)break;
+                    }
+                }
+                return result;
+            };
+            funcs.__YA_FUNCS_HANLDERS = handlers;
+            funcs.add=function(handler){
+                handlers.push(handler);
+            }
+            funcs.remove=function(handler){
+                for(var i=0,j=handlers.length;i<j;i++){
+                    var existed = handlers.shift();
+                    if(existed !==handler && (eq ?!eq(handler,existed):true)){
+                        continue;
+                    }
+                }
+            }
+            return funcs;
 `;
             factory = funcsFactories[argc] = new Function("ck","eq",code) as (ck?:(handler:any)=>Function,eq?:(obj1:any,obj2:any)=>boolean)=>IFuncs;
 
@@ -364,10 +364,10 @@ return funcs;
         get_eventHandlers(event:string,addIfNone?:boolean):IFuncs{
             let maps = this._eventMaps || (this._eventMaps={});
             let handlers = maps[event];
-            if(!handlers && addIfNone) (maps[event]=createFuncs(2
+            if(!handlers && addIfNone) maps[event]=handlers=createFuncs(2
                 ,(handler:any)=>(handler as IEventCapture).handler||handler
                 ,(e1,e2)=>e1===e2||(e1.capture===e2.capture&& e1.raw==e2.raw)
-            ));
+            );
             return handlers;
         }
     }
@@ -375,7 +375,7 @@ return funcs;
     export interface ICompositable{
         
         name(value?:string):string|ICompositable;
-        composite(newComposite?:ICompositable):ICompositable;
+        composite(newComposite?:ICompositable,internalUsage?:string):ICompositable;
         components(name:number|string,child?:ICompositable):ICompositable|ICompositable[];
         add(compoent:ICompositable,index?:number):ICompositable;
         remove(compoent:ICompositable|string):ICompositable;
@@ -496,6 +496,7 @@ return funcs;
             }
             if(!inserted) {components.push(child);}
             if(child.name()) this[child.name() as string] = child; 
+            child.composite(this,"<internal_use>");
             return inserted;
         }
         remove(child:Compositable,evtable?:string):ICompositable{
@@ -606,6 +607,7 @@ return funcs;
      */
     export interface IComponent extends IObservable,ICompositable{
         element:HTMLElement;
+        root():IComponent;
         opts(opts?:IComponentOpts):IComponentOpts|IComponent;
         className(value?:string):string|IComponent;
         visible(value?:boolean):boolean|IComponent;
@@ -613,15 +615,19 @@ return funcs;
         x(value?:number):number|IComponent;
         y(value?:number):number|IComponent;
         position(value?:string):string|IComponent;
+        location(point?:IPoint|string,relative?:string):IPoint|IComponent;
         move(args:IPoint|IEventHandler):IComponent;
 
         width(value?:any):any;
         height(value?:any):any;
         resize(args:ISize|IEventHandler):IComponent;
+        resizable(value?:any):any;
         
         scrollX(value?:number):number|IComponent;
         scrollY(value?:number):number|IComponent;
         scroll(args:IPoint|IEventHandler):IComponent;
+
+        content(value?:string):string|IComponent;
 
         attrs(name:{[attrName:string]:string}|string,value?:string):string|IComponent;
         css(name:string|{[name:string]:string},value?:string):string|IComponent;
@@ -655,42 +661,45 @@ return funcs;
             let opts = element as IComponentOpts;
             let tag = opts.tag || "div";
             this.element = createElement(tag);
+            (this.element as any).__YA_COMPOMENT = this;
             this.opts(opts);
         }
-        get_eventHandlers:(event:string,addIfNone?:boolean)=>IFuncs;
+        get_eventHandlers(event:string,addIfNone?:boolean):IFuncs{
+            return Observable.prototype.get_eventHandlers.call(this,event,addIfNone);
+        }
         _bindedEvents:{[event:string]:IFuncs};
         subscribe(event:string,handler:IEventHandler,capture?:boolean):IComponent{
             let convertor = eventConvertors[event];
             if(convertor){
-                let evtHandler:any= function(sender:any,evt:Event){
-                    let args;
-                    if(evt===undefined){
-                        evt =sender;
-                        sender = undefined;
-                        args = convertor(evt||(evt=window.event));
-                        let target:any = evt.target;
-                        while(target){
-                            if(sender =target.__YA_COMPOMENT){
-                                 break;
-                            }
-                            target = target.parentNode;
-                        }
-                    }
-                    return handler(sender||component,args);
-                };
                 let funcs = (this._bindedEvents||(this._bindedEvents={}))[event];
-                if(!funcs) {
-                    this._bindedEvents[event]=funcs=this.get_eventHandlers(event,true);
-                    attach(this.element,event,funcs);
+                if(!funcs){
+                    funcs=this._bindedEvents[event]=this.get_eventHandlers(event,true);
+                    ((fns:IFuncs)=>attach(this.element,event, function(sender:any,evt:Event){
+                        let args;
+                        if(evt===undefined){
+                            evt =sender;
+                            sender = undefined;
+                            args = convertor(evt||(evt=window.event));
+                            let target:any = evt.target;
+                            while(target){
+                                if(sender =target.__YA_COMPOMENT){
+                                     break;
+                                }
+                                target = target.parentNode;
+                            }
+                        }
+                        return funcs(sender||component,args);
+                    }))(funcs);
                 }
-                funcs.add({
-                    handler:evtHandler,
-                    src:handler
-                });
+                funcs.add(handler);
+            }else{
+                this.get_eventHandlers(event,true).add(handler);
             }
             return this;
         }
-        unsubscribe:(event:string,handler:IEventHandler,capture?:boolean)=>IComponent;
+        unsubscribe(event:string,handler:IEventHandler,capture?:boolean):IComponent{
+            return Observable.prototype.unsubscribe(event,handler,capture) as IComponent;
+        }
         notify(event:string,args:IEventArgs):IComponent{
             if(this._preventEvent) return this;
             args= args||{src:this};
@@ -751,7 +760,7 @@ return funcs;
             for(let key in opts){
                 let value = opts[key];
                 let cmd = key[0];
-                if(cmd=="."){
+                if(cmd=="#"){
                     let name = key.substr(1);
                     value.name = name;
                     let ctype = value.type;
@@ -805,6 +814,12 @@ return funcs;
         className(value?:string):string|IComponent{
             if(value===undefined) return this.element.className;
             this.element.className = value;
+            return this;
+        }
+
+        content(value?:string):string|IComponent{
+            if(value===undefined) return this.contentElement().innerHTML;
+            this.contentElement().innerHTML = value;
             return this;
         }
         
@@ -881,7 +896,7 @@ return funcs;
         }
 
         location(point?:IPoint|string,relative?:string):IPoint|IComponent{
-            if(point===undefined|| point==="doc"){
+            if(point===undefined|| point==="absolute"){
                 let elm = this.element;
                 let p :IPoint= {x:0,y:0};
                 let meetBody = false;
@@ -895,7 +910,7 @@ return funcs;
                 }
                 if(meetBody) return p;
                 else return {};
-            }else if(point==="screen"){
+            }else if(point==="fixed"){
                 //let scrollx = Math.max(document.body.scrollLeft,document);
             }
             
@@ -982,6 +997,53 @@ return funcs;
             if(point.y) this.element.scrollTop = point.y;
             return this.notify("scroll",{type:"scroll",src:this,x:point.x,y:point.y});
         }
+        _resizable:any;
+        _resizableMousemoveHandler:any;
+        _resizableMousedownHandler:any;
+        resizable(value?:any){
+            if(value===undefined) return this._resizable;
+            let dockPos = this._dock;
+            if(dockPos==="left"){
+                this._resizableMousemoveHandler = (sender,args)=>{
+                    let w = this.width(true);
+                    let borderx = w-4;
+                    if(args.x<borderx){
+                        this.cursor("default");
+                    }else {
+                        this.cursor("ew-resize");
+                    }
+                };
+                this.subscribe("mousemove",this._resizableMousemoveHandler);
+                this._resizableMousedownHandler = (sender,args)=>{
+                    let w = this.width(true);
+
+                    let x0 :number;
+                    let y0 :number;
+                    let borderx = w-4;
+                    if(args.x>borderx){
+                        let mask = createElement("div");
+                        mask.style.cssText="position:absolute;z-index:999999;width:100%;background-color:#fff;opacity:0.4;left:0;top:0;";
+                        mask.style.height = this.root().height(true) + "px";
+                        this.root().element.appendChild(mask);
+                        mask.onmouseover = (evt)=>{
+                            x0 = evt.offsetX;
+                            y0 = evt.offsetY;
+                            mask.onmouseover=null;
+                        };
+                        mask.onmousemove =(evt)=>{
+                            let x = evt.offsetX;
+                            let y = evt.offsetY;
+                            this.width(w + x-x0);
+                            (this._composite as IComponent).refresh(false);
+                        };
+                        mask.onmouseout = mask.onmouseup = (evt)=>{
+                            mask.parentNode.removeChild(mask);
+                        }
+                    }
+                };
+                this.subscribe("mousedown",this._resizableMousedownHandler);
+            }
+        }
 
         css(name:string|{[name:string]:string},value?:string):string|IComponent{
             if(value===undefined) {
@@ -999,6 +1061,12 @@ return funcs;
         opacity(value?:number):number|IComponent{
             if(value===undefined) return parseFloat(this._opacity===undefined?(this._opacity=getStyle(this.element,"opacity")).toString():this._opacity);
             this.element.style.opacity = this._opacity=value.toString();
+            return this;
+        }
+
+        cursor(value?:string):string|IComponent{
+            if(value===undefined) return getStyle(this.element,"cursor");
+            this.element.style.cursor = value;
             return this;
         }
         attrs(name:string|{[attrname:string]:string},value?:string):string|IComponent{
@@ -1171,10 +1239,11 @@ return funcs;
         }
 
         static types :{[name:string]:Function} = {};
-        //static binds:{[token:string]:(prop:string,value:any,comp:IComponent)=>void}={};
+        static feature(name:string,feature:Function){
+            Component.prototype[name]=feature;
+        }
         
     }
-    (Observable as Function)(Component);
     export let componentTypes:{[name:string]:Function} = Component.types;
     export function component(opts:IComponentOpts,parent?:IComponent|HTMLElement):IComponent{
         let cls:any = componentTypes[opts.type]||Component;
@@ -1193,10 +1262,17 @@ return funcs;
         return {type:"scroll",x:(e.target as HTMLElement).scrollLeft,y:(e.target as HTMLElement).scrollTop} as IEventArgs;
     };
     eventConvertors["focus"] = (e:Event)=>({type:"focus"} as IEventArgs);
+    eventConvertors["mousemove"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"mousemove"}));
+    eventConvertors["mousedown"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"mousedown"}));
+    eventConvertors["mouseup"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"mouseup"}));
+    eventConvertors["mouseenter"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"mouseenter"}));
+    eventConvertors["mouseout"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"mouseout"}));
     eventConvertors["click"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"click"}));
     eventConvertors["dblclick"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"dblclick"}));
     eventConvertors["keyup"] = (e:Event)=>keyEventConvertor(e,{type:"keyup"});
     eventConvertors["keydown"] = (e:Event)=>keyEventConvertor(e,{type:"keydown"});
+    eventConvertors["keypress"] = (e:Event)=>keyEventConvertor(e,{type:"keypress"});
+
     function keyEventConvertor(e:Event,args?:any):IEventArgs{
         args||(args={});
         args.altKey = (e as any).altKey;
@@ -1222,7 +1298,45 @@ return funcs;
         bottom_y:number;
         spaceHeight:number;
     }
+    export interface IMaskOpts{
+        css?:{[name:string]:string};
+        content?:string|IComponent;
+        className?:string;
+    }
+    Component.feature("mask",function(opts:IMaskOpts){
+        let me = this as IComponent;
+        let maskc = new Component("div");
+        if(opts.css) maskc.css(opts.css);
+        maskc.className("ya-mask " +(opts.className||""));
+        maskc.css({
+            position:"absolute",
+            overflow:"hidden",
+            zIndex:"9999999"
+        });
+        maskc.content("<div class='ya-mask-bg' style='position:absolute;left:0;right:0;margin:0;padding:0;border:0;'></div>");
+        
+        let maske = maskc.element;
+        let maskb = maske.firstChild as HTMLElement;
+        let refresh = ()=>{
+            let x :number,y:number;
+            if(me === me.root()){
+                x = me.scrollX() as number;
+                y = me.scrollY() as number;
+            }else {
+                let p:IPoint = me.location("absolute") as IPoint;
+                x=p.x;
+                y=p.y;
+            }
+            
+            let w = me.width(true);
+            let h = me.height(true);
+            maske.style.left = x + "px";
+            maske.style.top = y + "px";
+            maske.style.width = maskb.style.width = w + "px";
+            maske.style.height = maskb.style.height = h + "px";
+        };
 
+    });
     
     
     
@@ -1334,8 +1448,13 @@ let user = {
         ]}
     ]
 };
+/*
 let dp = new YA.DataPath("roles[1].permissions[last-1]");
 let v = dp.getValue(user);
 console.log(v);
 dp.setValue(user,{});
-console.log(user.roles[1].permissions[1]);
+console.log(user.roles[1].permissions[1]);*/
+
+function xxx(ck,eq){
+    
+}

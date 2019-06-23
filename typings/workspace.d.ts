@@ -63,7 +63,7 @@ declare namespace YA {
     }
     interface ICompositable {
         name(value?: string): string | ICompositable;
-        composite(newComposite?: ICompositable): ICompositable;
+        composite(newComposite?: ICompositable, internalUsage?: string): ICompositable;
         components(name: number | string, child?: ICompositable): ICompositable | ICompositable[];
         add(compoent: ICompositable, index?: number): ICompositable;
         remove(compoent: ICompositable | string): ICompositable;
@@ -133,19 +133,23 @@ declare namespace YA {
      */
     interface IComponent extends IObservable, ICompositable {
         element: HTMLElement;
+        root(): IComponent;
         opts(opts?: IComponentOpts): IComponentOpts | IComponent;
         className(value?: string): string | IComponent;
         visible(value?: boolean): boolean | IComponent;
         x(value?: number): number | IComponent;
         y(value?: number): number | IComponent;
         position(value?: string): string | IComponent;
+        location(point?: IPoint | string, relative?: string): IPoint | IComponent;
         move(args: IPoint | IEventHandler): IComponent;
         width(value?: any): any;
         height(value?: any): any;
         resize(args: ISize | IEventHandler): IComponent;
+        resizable(value?: any): any;
         scrollX(value?: number): number | IComponent;
         scrollY(value?: number): number | IComponent;
         scroll(args: IPoint | IEventHandler): IComponent;
+        content(value?: string): string | IComponent;
         attrs(name: {
             [attrName: string]: string;
         } | string, value?: string): string | IComponent;
@@ -164,12 +168,12 @@ declare namespace YA {
         private _width;
         private _height;
         constructor(element?: string | HTMLElement | IComponentOpts);
-        get_eventHandlers: (event: string, addIfNone?: boolean) => IFuncs;
+        get_eventHandlers(event: string, addIfNone?: boolean): IFuncs;
         _bindedEvents: {
             [event: string]: IFuncs;
         };
         subscribe(event: string, handler: IEventHandler, capture?: boolean): IComponent;
-        unsubscribe: (event: string, handler: IEventHandler, capture?: boolean) => IComponent;
+        unsubscribe(event: string, handler: IEventHandler, capture?: boolean): IComponent;
         notify(event: string, args: IEventArgs): IComponent;
         onComponentChanged(event: string, component: IComponent, index?: number): void;
         componentChange(handler: (sender: IComponent, args: IComponentChangeEventArgs) => any): IComponent;
@@ -182,6 +186,7 @@ declare namespace YA {
         _dock: string;
         dock(value?: string): string | IComponent;
         className(value?: string): string | IComponent;
+        content(value?: string): string | IComponent;
         private _disNone;
         private _visible;
         visible(value?: boolean): boolean | IComponent;
@@ -199,11 +204,16 @@ declare namespace YA {
         scrollX(value?: number): IComponent | number;
         scrollY(value?: number): IComponent | number;
         scroll(point: IPoint | IEventHandler): IComponent;
+        _resizable: any;
+        _resizableMousemoveHandler: any;
+        _resizableMousedownHandler: any;
+        resizable(value?: any): any;
         css(name: string | {
             [name: string]: string;
         }, value?: string): string | IComponent;
         _opacity: string;
         opacity(value?: number): number | IComponent;
+        cursor(value?: string): string | IComponent;
         attrs(name: string | {
             [attrname: string]: string;
         }, value?: string): string | IComponent;
@@ -217,6 +227,7 @@ declare namespace YA {
         static types: {
             [name: string]: Function;
         };
+        static feature(name: string, feature: Function): void;
     }
     let componentTypes: {
         [name: string]: Function;
@@ -232,6 +243,13 @@ declare namespace YA {
         top_y: number;
         bottom_y: number;
         spaceHeight: number;
+    }
+    interface IMaskOpts {
+        css?: {
+            [name: string]: string;
+        };
+        content?: string | IComponent;
+        className?: string;
     }
     interface IResiseableComponentOpts extends IComponentOpts {
         minSize: number;
@@ -272,5 +290,4 @@ declare let user: {
         }[];
     }[];
 };
-declare let dp: YA.DataPath;
-declare let v: any;
+declare function xxx(ck: any, eq: any): void;
