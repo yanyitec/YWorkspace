@@ -14,19 +14,72 @@ namespace YA{
         if(argc===undefined) return function(){return func.apply(self,arguments);}
         if(argc===0) return function(){return func.call(self);}
         if(argc===1) return function(arg){return func.call(self,arg);}
-        let dele = delegateFactories[argc];
-        if(!dele){
+        let factory = delegateFactories[argc];
+        if(!factory){
             let argList="";
             for(let i = 0,j=argc;i<j;i++){
                 if(argList)argList += ",";
                 argList += "arg"+i;
             }
             let code = `return function(${argList}){return func.call(self,${argList})}`;
-            dele = delegateFactories[argc] = new Function("func","self",code) as (func:Function,self:object)=>Function;
+            factory = delegateFactories[argc] = new Function("func","self",code) as (func:Function,self:object)=>Function;
 
         }
-        return dele(func,self);
+        return factory(func,self);
     }
+
+    export interface IFuncs{
+        (...args:any[]):any;
+        add(handler:any);
+        remove(handler:any);
+    }
+    let funcsFactories:Array<(ck?:(handler:any)=>Function,eq?:(obj1:any,obj2:any)=>boolean)=>IFuncs>=[];
+    export function createFuncs(argc?:number,ck?:(handler:any)=>Function,eq?:(obj1:any,obj2:any)=>boolean):IFuncs{
+        let factory = funcsFactories[argc||0];
+        if(!factory){
+            let argList="";
+            for(let i = 0,j=argc;i<j;i++){
+                if(argList)argList += ",";
+                argList += "arg"+i;
+            }
+            let code = `var handlers = [];
+var funcs = function(${argList}){
+    var result;
+    for(let i=0,j=handlers.length;i<j;i++){
+        let handler = handlers[i];
+        if(ck){
+            handler = ck(func);
+            if(!handler) continue;
+        }
+        let rs = handler(${argList});
+        if(rs!==undefined){
+            result = rs;
+            if(rs===false)break;
+        }
+    }
+    return result;
+};
+funcs.__YA_FUNCS_HANLDERS = handlers;
+funcs.add(handler){
+    handlers.push(handler);
+}
+funcs.remove(handler){
+    for(var i=0,j=handlers.length;i<j;i++){
+        var existed = handlers.shift();
+        if(existed !==handler && (eq ?!dq(handler,existed):true){
+            continue;
+        }
+    }
+}
+return funcs;
+`;
+            factory = funcsFactories[argc] = new Function("ck","eq",code) as (ck?:(handler:any)=>Function,eq?:(obj1:any,obj2:any)=>boolean)=>IFuncs;
+
+        }
+        return factory(ck,eq);
+    }
+
+    
     export class DataPath{
         
         fromRoot:boolean;
@@ -253,32 +306,38 @@ namespace YA{
         }
     }
 
-
     export interface IEventHandler{
-        (sender:any,eventArgs:any):any;
+        (sender:any,eventArgs:IEventArgs):any;
+    }
+    export interface IEventArgs{
+        [key:string]:any;
+        type?:string;
+        src?:any;
+        canceled?:boolean;
     }
     export interface IEventCapture{
         handler:IEventHandler;
+        raw:IEventHandler;
         capture:object;
     }
     export interface IObservable{
         subscribe(event:string,handler:IEventHandler,capture?:boolean):IObservable;
         unsubscribe(event:string,handler:IEventHandler,capture?:boolean):IObservable;
-        notify(event:string,args:any,sender?:any):IObservable;
+        notify(event:string,args:IEventArgs):IObservable;
+        get_eventHandlers(event:string,addIfNone?:boolean):IFuncs;
     }
     
 
     export class Observable implements IObservable{
-        private _eventMaps:{[evtName:string]:Array<IEventHandler|IEventCapture>};
+        private _eventMaps:{[evtName:string]:IFuncs};
 
         constructor(injectTaget?:Function|object){
             if(injectTaget)xable(injectTaget,Observable);
         }
 
         subscribe(event:string,handler:IEventHandler,capture?:boolean):IObservable{
-            let maps = this._eventMaps || (this._eventMaps={});
-            let handlers = maps[event] || (maps[event]=[]);
-            handlers.push(capture?{handler:handler,capture:this}:handler);
+            let handlers = this.get_eventHandlers(event,true);
+            handlers.add(capture?{handler:handler,capture:this,src:handler}:handler);
             return this;
         }
         unsubscribe(event:string,handler:IEventHandler,capture?:boolean):IObservable{
@@ -289,56 +348,27 @@ namespace YA{
             let maps = this._eventMaps;
             if(maps) {
                 let handlers = maps[event];
-                if(handlers){
-                    for(let i =0,j=handlers.length;i<j;i++){
-                        let existed = handlers.shift();
-                        if(capture){
-                            if((existed as IEventCapture).handler!==handler) handlers.push(existed);
-                        }
-                        else {
-                            if(existed!==handler) handlers.push(existed);
-                        }
-                        
-                    }
-                }
+                if(handlers) handlers.remove(capture?{handler:handler,src:handler,capture:this}:handler);
             }
             return this;
         }
 
-        notify(event:string,args:any,sender?:any):IObservable{
+        notify(event:string,args:IEventArgs):IObservable{
             let maps = this._eventMaps;
             if(maps) {
                 let handlers = maps[event];
-                if(handlers){
-                    if(!sender) sender = this;
-                    let canceled = false;
-                    for(let i =0,j=handlers.length;i<j;i++){
-                        let existed:any = handlers.shift();
-                        let handler = existed.handler||existed;
-                        if(!canceled) {
-                            if(existed.capture){
-                                if(existed.capture!==this){
-                                    handlers.push(existed);
-                                    continue;
-                                }
-                            }
-                            let result = handler(sender,args);
-                            if(result===false|| result=="<cancel>"){
-                                canceled = true;
-                            }else if(result==="<remove>"){
-                                continue;
-                            }else if(result==="<remove,cancel>" || result ==="<cancel,remove>"){
-                                canceled = true;
-                                continue;
-                            }
-                            handlers.push(existed);
-                        }
-                        
-                    }
-                    if(args) args.canceled = canceled;
-                }
+                if(handlers)handlers.call(this,args);
             }
             return this;
+        }
+        get_eventHandlers(event:string,addIfNone?:boolean):IFuncs{
+            let maps = this._eventMaps || (this._eventMaps={});
+            let handlers = maps[event];
+            if(!handlers && addIfNone) (maps[event]=createFuncs(2
+                ,(handler:any)=>(handler as IEventCapture).handler||handler
+                ,(e1,e2)=>e1===e2||(e1.capture===e2.capture&& e1.raw==e2.raw)
+            ));
+            return handlers;
         }
     }
 
@@ -497,16 +527,31 @@ namespace YA{
 
     export let getStyle = (obj:HTMLElement,attr:string):string =>{
         if((obj as any).currentStyle){//兼容IE
-            getStyle = (obj:HTMLElement,attr:string):string=>(obj as any).currentStyle[attr];
+            getStyle = YA.getStyle = (obj:HTMLElement,attr:string):string=>(obj as any).currentStyle[attr];
         }else{
-            getStyle = (obj:HTMLElement,attr:string):string=>{
+            getStyle = YA.getStyle = (obj:HTMLElement,attr:string):string=>{
                 let f:any = false;
                 return getComputedStyle(obj,f)[attr];
             };
         }
         return getStyle(obj,attr);
     }
-    
+    export let attach = (elem:HTMLElement,event:string,handler:Function)=>{
+        if(elem.addEventListener){
+            attach = YA.attach = (elem:HTMLElement,event:string,handler:Function)=>elem.addEventListener(event,handler as any,false);
+        }else {
+            attach = YA.attach = (elem:HTMLElement,event:string,handler:Function)=>(elem as any).attachEvent("on" +event,handler as any);
+        }
+        return attach(elem,event,handler);
+    }
+    export let detech = (elem:HTMLElement,event:string,handler:Function)=>{
+        if(elem.removeEventListener){
+            detech = YA.detech = (elem:HTMLElement,event:string,handler:Function)=>elem.removeEventListener(event,handler as any,false);
+        }else {
+            detech = YA.detech = (elem:HTMLElement,event:string,handler:Function)=>(elem as any).detechEvent("on" +event,handler as any);
+        }
+        return detech(elem,event,handler);
+    }
     export function isInview(element:HTMLElement):boolean{
         let doc = element.ownerDocument;
         while(element){
@@ -514,6 +559,32 @@ namespace YA{
             element = element.parentNode as HTMLElement;
         }
         return false;
+    }
+
+    export interface IComponentChangeEventArgs{
+        type:string;
+        component:IComponent;
+        index?:number;
+    }
+
+    export interface IPoint{
+        x?:number;
+        y?:number;
+    }
+    
+    export interface ISize{
+        width?:number;
+        height?:number;
+    }
+
+    export interface IBox extends IPoint,ISize{}
+
+    export interface IBoxEventArgs{
+        type:string;
+        x?:number;
+        y?:number;
+        width?:number;
+        height?:number;
     }
     
     export interface IComponentOpts{
@@ -524,6 +595,8 @@ namespace YA{
         attrs?:{[index:string]:string};
         css?:{[index:string]:string};
         children?:Array<IComponentOpts>;
+        model?:any;
+        actions?:Function[];
     }
 
     /**
@@ -532,34 +605,43 @@ namespace YA{
      * @interface IComponent
      */
     export interface IComponent extends IObservable,ICompositable{
-       element:HTMLElement;
-       opts(opts?:IComponentOpts):IComponentOpts|IComponent;
-       className(value?:string):string|IComponent;
-       visible(value?:boolean):boolean|IComponent;
-       x(value?:number):number|IComponent;
-       y(value?:number):number|IComponent;
-       width(value?:any):any;
-       height(value?:any):any;
-       attrs(name:{[attrName:string]:string}|string,value?:string):string|IComponent;
-       css(name:string|{[name:string]:string},value?:string):string|IComponent;
-       dock(value?:string):string|IComponent;
-       position(value?:string):string|IComponent;
-       suspend(handler?:(comp:IComponent)=>void):IComponent;
-       resume():IComponent;
-       refresh(includeCHildren?:boolean):IComponent;
-       renovate(data?:any,diff?:boolean):IComponent;
-       update(data:any,diff?:boolean):IComponent;
+        element:HTMLElement;
+        opts(opts?:IComponentOpts):IComponentOpts|IComponent;
+        className(value?:string):string|IComponent;
+        visible(value?:boolean):boolean|IComponent;
+
+        x(value?:number):number|IComponent;
+        y(value?:number):number|IComponent;
+        position(value?:string):string|IComponent;
+        move(args:IPoint|IEventHandler):IComponent;
+
+        width(value?:any):any;
+        height(value?:any):any;
+        resize(args:ISize|IEventHandler):IComponent;
+        
+        scrollX(value?:number):number|IComponent;
+        scrollY(value?:number):number|IComponent;
+        scroll(args:IPoint|IEventHandler):IComponent;
+
+        attrs(name:{[attrName:string]:string}|string,value?:string):string|IComponent;
+        css(name:string|{[name:string]:string},value?:string):string|IComponent;
+        dock(value?:string):string|IComponent;
+        
+        
+        suspend(handler?:(comp:IComponent)=>void):IComponent;
+        resume():IComponent;
+        refresh(includeCHildren?:boolean):IComponent;
+        renovate(data?:any,diff?:boolean):IComponent;
+        update(data:any,diff?:boolean):IComponent;
        //update():IComponent;
     }
 
+    let notify = Observable.prototype.notify;
     
     export class Component extends Compositable implements IComponent{
         element:HTMLElement;
-        
-
         private _width:any;
         private _height:any;
-        private _percentHeight:number;
         constructor(element?:string|HTMLElement|IComponentOpts){
             super();
             if(typeof element==="string"){
@@ -575,15 +657,46 @@ namespace YA{
             this.element = createElement(tag);
             this.opts(opts);
         }
-
-        subscribe:(event:string,handler:IEventHandler,capture?:boolean)=>IComponent;
+        get_eventHandlers:(event:string,addIfNone?:boolean)=>IFuncs;
+        _bindedEvents:{[event:string]:IFuncs};
+        subscribe(event:string,handler:IEventHandler,capture?:boolean):IComponent{
+            let convertor = eventConvertors[event];
+            if(convertor){
+                let evtHandler:any= function(sender:any,evt:Event){
+                    let args;
+                    if(evt===undefined){
+                        evt =sender;
+                        sender = undefined;
+                        args = convertor(evt||(evt=window.event));
+                        let target:any = evt.target;
+                        while(target){
+                            if(sender =target.__YA_COMPOMENT){
+                                 break;
+                            }
+                            target = target.parentNode;
+                        }
+                    }
+                    return handler(sender||component,args);
+                };
+                let funcs = (this._bindedEvents||(this._bindedEvents={}))[event];
+                if(!funcs) {
+                    this._bindedEvents[event]=funcs=this.get_eventHandlers(event,true);
+                    attach(this.element,event,funcs);
+                }
+                funcs.add({
+                    handler:evtHandler,
+                    src:handler
+                });
+            }
+            return this;
+        }
         unsubscribe:(event:string,handler:IEventHandler,capture?:boolean)=>IComponent;
-        notify(event:string,args:any,sender?:any):IComponent{
-            if(this._preventRefresh) return this;
-            args= args||{};
-            Observable.prototype.notify.call(this,args,sender);
+        notify(event:string,args:IEventArgs):IComponent{
+            if(this._preventEvent) return this;
+            args= args||{src:this};
+            notify.call(this,args);
             if(!args.canceled && this._composite){
-                (this._composite as IComponent).notify(event,args,sender);
+                (this._composite as IComponent).notify(event,args);
             }
             return this;
         }
@@ -598,27 +711,43 @@ namespace YA{
                     contentElement.insertBefore(component.element,a);
                 }
                 if(isInview(this.element)) component.refresh();
-                this.notify("componentAdded",{index:index,component:component},this);
+                this.notify("componentChange",{index:index,component:component,type:"added",src:this} as IEventArgs);
             }else if(event==="removed"){
                 contentElement.removeChild(component.element);
-                this.notify("componentRemoved",{index:index,component:component},this);
+                this.notify("componentChange",{index:index,component:component,type:"removed",src:this} as IEventArgs);
             }else if(event==="replaced"){
                 contentElement.replaceChild(component.element,contentElement.childNodes[index]);
-                this.notify("componentReplaced",{index:index,component:component},this);
+                this.notify("componentChange",{index:index,component:component,type:"replaced",src:this} as IEventArgs);
             }
+        }
+        componentChange(handler:(sender:IComponent,args:IComponentChangeEventArgs)=>any):IComponent{
+            this.subscribe("componentChange",handler);
+            return this;
         }
 
         protected contentElement():HTMLElement{
             return this.element;
         }
-        
+        _root:IComponent;
+        root():IComponent{
+            let root = this._root;
+            if(!root){
+                root = (this.element.ownerDocument as any).__YA_ROOT_COMPONENT;
+                if(!root){
+                    let rootElement = this.element.ownerDocument.compatMode==="BackCompat"?this.element.ownerDocument.body:this.element.ownerDocument.documentElement;
+                    root = this._root = (this.element.ownerDocument as any).__YA_ROOT_COMPONENT = new Component(rootElement);
+                }else this._root = root;
+            }
+            return root;
+        }
+
         private _binders:{[prop:string]:Binder};
         _opts:IComponentOpts;
         opts(opts?:IComponentOpts):IComponent|IComponentOpts{
             if(opts===undefined) return this._opts;
             if(this._opts) throw new Error("还不支持重复设置opts");
-            let oldPrevent = this._preventRefresh;
-            this._preventRefresh = true;
+            let oldPrevent = this._preventEvent;
+            this._preventEvent = true;
             for(let key in opts){
                 let value = opts[key];
                 let cmd = key[0];
@@ -630,6 +759,14 @@ namespace YA{
                     let component = new cls(value);
                     this.add(component);
                     continue;
+                }else if(cmd=="!"){
+                    let name = key.substr(1);
+                    if(typeof value==="function"){
+                        this.subscribe(name,value);
+                    }else{
+                        let dataPath = new DataPath(value);
+
+                    }
                 }else if(typeof value==="string"){
                     let binder = Binder.tryMake(value,key,this);
                     if(binder){
@@ -644,7 +781,7 @@ namespace YA{
                 }
             }
             
-            this._preventRefresh = oldPrevent;
+            this._preventEvent = oldPrevent;
             return this;
         }
 
@@ -661,6 +798,8 @@ namespace YA{
             
             return this;
         }
+
+
 
         
         className(value?:string):string|IComponent{
@@ -698,6 +837,9 @@ namespace YA{
                 return this;
             }
         }
+        show(animate?:boolean){
+            
+        }
         _x:number;
         x(value?:number|boolean):IComponent|number{
             if(value===undefined||value===true){
@@ -708,12 +850,7 @@ namespace YA{
                 if(this._x===undefined) this._x = parseFloat(this.css("left") as string);
                 return this._x;
             }
-            if(this._dock && !this._preventRefresh){
-                console.warn("已经设置了停靠dock,再设置x()为无效操作");
-                //return this;
-            }
-            this.element.style.left = (this._x=value)+"px";
-            return this;
+            return this.move({x:value});
         }
         _y:number;
         y(value?:number|boolean):IComponent|number{
@@ -724,12 +861,44 @@ namespace YA{
                 if(this._y===undefined) this._y = parseFloat(this.css("top") as string);
                 return this._y;
             }
-            if(this._dock && !this._preventRefresh){
+            
+            return this.move({y:value});
+        }
+        move(args:IPoint|IEventHandler):IComponent{
+            if(typeof args==="function"){
+                this.subscribe("move",args as IEventHandler);
+                return this;
+            }
+            if(this._dock && !this._preventEvent){
                 console.warn("已经设置了停靠dock,再设置y()为无效操作");
                 //return this;
             }
-            this.element.style.top = (this._y=value)+"px";
+            this.position(true);
+            if(args.x!==undefined)this.element.style.left = (this._x=args.x)+"px";
+            if(args.y!==undefined)this.element.style.top = (this._y=args.y)+"px";
+            this.notify("move",{x:args.x,y:args.y,src:this,type:"move"} as IEventArgs);
             return this;
+        }
+
+        location(point?:IPoint|string,relative?:string):IPoint|IComponent{
+            if(point===undefined|| point==="doc"){
+                let elm = this.element;
+                let p :IPoint= {x:0,y:0};
+                let meetBody = false;
+                while(elm){
+                    p.x += elm.offsetLeft;
+                    p.y +=elm.offsetTop;
+                    elm = elm.offsetParent as HTMLElement;
+                    if(elm === elm.ownerDocument.body){
+                        meetBody=true;
+                    }
+                }
+                if(meetBody) return p;
+                else return {};
+            }else if(point==="screen"){
+                //let scrollx = Math.max(document.body.scrollLeft,document);
+            }
+            
         }
 
         width(value?:any):any{
@@ -738,7 +907,7 @@ namespace YA{
             }else if(value===true){
                 return this.element.clientWidth;
             }
-            if(this._dock && !this._preventRefresh){
+            if(this._dock && !this._preventEvent){
                 console.warn("已经设置了停靠dock,再设置width()为无效操作");
                 //return this;
             }
@@ -747,7 +916,7 @@ namespace YA{
             if(intRegx.test(this._width)){
                 this.element.style.width= this._width+"px";
             }else this.element.style.width = this._width;
-            return this;
+            return this.notify("resize",{width:this.element.clientWidth});
         }
 
         height(value?:any):any{
@@ -756,20 +925,28 @@ namespace YA{
             }else if(value===true){
                 return this.element.clientHeight;
             }
-            if(this._dock && !this._preventRefresh){
+            if(this._dock && !this._preventEvent){
                 console.warn("已经设置了停靠dock,再设置height()为无效操作");
                 //return this;
             }
             if(value===this._height) return this;
+            
             this._height=value;
-            this._percentHeight = undefined;
             if(intRegx.test(this._height)){
                 this.element.style.height= this._height+"px";
-            }else if(percentRegx.test(this._height)){
-                this._percentHeight = parseFloat(value);
+            }else{
+                this.element.style.height= this._height;
             }
-            
-            return this;
+            return this.notify("resize",{height:this.element.clientHeight});
+        }
+
+        resize(args:ISize|IEventHandler):IComponent{
+            if(typeof args==="function"){
+                return this.subscribe("resize",args as IEventHandler);
+            }
+            if(args.width!==undefined)  this.element.style.width= (this._width=args.width)+"px";
+            if(args.height!==undefined)  this.element.style.height= (this._height=args.height)+"px";
+            return this.notify("resize",{type:"resize",width:args.width,height:args.height,src:this});
         }
         position(value?:string|boolean):string|IComponent{
             if(value===undefined) return this.css("position");
@@ -781,6 +958,31 @@ namespace YA{
             this.element.style.position= value as string;
             return this;
         }
+
+        scrollX(value?:number):IComponent|number{
+            if(value===undefined){
+                return this.element.scrollLeft;
+            }
+            return this.scroll({x:value});
+            
+        }
+
+        scrollY(value?:number):IComponent|number{
+            if(value===undefined){
+                return this.element.scrollTop;
+            }
+            return this.scroll({y:value});
+        }
+
+        scroll(point:IPoint|IEventHandler):IComponent{
+            if(typeof point==="function"){
+                return this.subscribe("scroll",point as IEventHandler);
+            }
+            if(point.x) this.element.scrollLeft= point.x;
+            if(point.y) this.element.scrollTop = point.y;
+            return this.notify("scroll",{type:"scroll",src:this,x:point.x,y:point.y});
+        }
+
         css(name:string|{[name:string]:string},value?:string):string|IComponent{
             if(value===undefined) {
                 if(typeof name==='object'){
@@ -792,6 +994,12 @@ namespace YA{
             this.element.style[name as string]=value;
             return this;
 
+        }
+        _opacity:string;
+        opacity(value?:number):number|IComponent{
+            if(value===undefined) return parseFloat(this._opacity===undefined?(this._opacity=getStyle(this.element,"opacity")).toString():this._opacity);
+            this.element.style.opacity = this._opacity=value.toString();
+            return this;
         }
         attrs(name:string|{[attrname:string]:string},value?:string):string|IComponent{
             if(value===undefined) {
@@ -805,30 +1013,31 @@ namespace YA{
             return this;
 
         }
-        protected _preventRefresh:boolean;
-        suspend(handler?:(comp:IComponent)=>void):IComponent{
+        protected _preventEvent:boolean;
+        suspend(handler?:(comp:IComponent)=>any):IComponent{
             if(handler){
-                let old = this._preventRefresh;
-                this._preventRefresh = true;
-                handler(this);
-                this._preventRefresh = old;
+                let old = this._preventEvent;
+                this._preventEvent = true;
+                let result = handler(this);
+                this._preventEvent = old;
+                if(result!==false && old) this.refresh();
                 return this;
             }
             
-            this._preventRefresh = true;
+            this._preventEvent = true;
             return this;
         }
         resume():IComponent{
-            let old = this._preventRefresh;
-            this._preventRefresh = false;
+            let old = this._preventEvent;
+            this._preventEvent = false;
             if(old) this.refresh();
             return this;
         }
-        refresh(includeCHildren?:boolean):IComponent{
-            if(this._preventRefresh) return this;
+        refresh(includeChildren?:boolean):IComponent{
             let children = this._components;
             let dockInfo:IDockInfo;
             if(children && children.length){
+                let filledChilds :IComponent[]=[];
                 for(let i =0,j=children.length;i<j;i++){
                     let child = children[i] as IComponent;
                     let dockPos = child.dock();
@@ -842,13 +1051,19 @@ namespace YA{
                             };
                             this.position(true);
                         }
-                        if(dockInfo.spaceHeight<=0||dockInfo.spaceWidth<=0){
-                            child.visible(false);
-                        }else{
-                            child.suspend((me)=>this._makeDock(child,dockInfo));
+                        if(dockPos==="fill") {
+                            filledChilds.push(child);
+                            continue;
                         }
+                        child.suspend((me)=>this._makeDock(child,dockInfo));
                     }
-                    if(includeCHildren) child.refresh(includeCHildren);
+                    if(includeChildren!==false) child.refresh(includeChildren);
+                }
+                if(filledChilds.length){
+                    for(let i=0;i<filledChilds.length;i++){
+                        let child = filledChilds[i];
+                        child.suspend((me)=>this._makeDock(child,dockInfo));
+                    }
                 }
                 
             }
@@ -856,48 +1071,67 @@ namespace YA{
         }
 
         //_dockInfo:IDockInfo;
-        private _makeDock(child:IComponent,dockInfo:IDockInfo){
-            
-            
+        private _makeDock(child:IComponent,dockInfo:IDockInfo):boolean{
+            if(dockInfo.spaceHeight<=0||dockInfo.spaceWidth<=0){
+                child.visible(false);
+                return;
+            }
             let dockPos = child.dock();
             child.position("absolute");
             if(dockPos==="left"){
                 let cw = child.width(true);
-                if(cw>=dockInfo.spaceWidth) this.width(cw=dockInfo.spaceWidth);
-                child.x(dockInfo.left_x);
-                child.height(dockInfo.spaceHeight);
-                child.y(dockInfo.top_y);
+                child.resize({
+                    width:(cw>=dockInfo.spaceWidth)?(cw=dockInfo.spaceWidth):undefined,
+                    height:dockInfo.spaceHeight
+                }).move({
+                    x:dockInfo.left_x,
+                    y:dockInfo.top_y
+                });
                 dockInfo.left_x += cw;
                 dockInfo.spaceWidth-= cw;
             }else if(dockPos==="right"){
                 let cw = child.width(true);
-                if(cw>=dockInfo.spaceWidth) this.width(cw=dockInfo.spaceWidth);
+                
                 dockInfo.right_x -= cw;
-                child.x(dockInfo.right_x);
-                child.height(dockInfo.spaceHeight);
-                child.y(dockInfo.top_y);
+                child.resize({
+                    width:(cw>=dockInfo.spaceWidth)?(cw=dockInfo.spaceWidth):undefined,
+                    height:dockInfo.spaceHeight
+                }).move({
+                    x:dockInfo.right_x,
+                    y:dockInfo.top_y
+                });
                 dockInfo.spaceWidth-= cw;
             }else if(dockPos==="top"){
                 let ch = child.height(true);
-                if(ch>=dockInfo.spaceHeight) this.height(ch=dockInfo.spaceHeight);
-                child.y(dockInfo.top_y);
-                child.width(dockInfo.spaceWidth);
+                child.resize({
+                    height:(ch>=dockInfo.spaceHeight)?(ch=dockInfo.spaceWidth):undefined,
+                    width:dockInfo.spaceWidth
+                }).move({
+                    x:dockInfo.left_x,
+                    y:dockInfo.top_y
+                });
                 dockInfo.top_y += ch;
-                child.x(dockInfo.left_x);
                 dockInfo.spaceHeight-= ch;
             }else if(dockPos==="bottom"){
                 let ch = child.height(true);
-                if(ch>dockInfo.spaceHeight) this.height(ch=dockInfo.spaceHeight);
                 dockInfo.bottom_y -= ch;
-                child.y(dockInfo.bottom_y);
-                child.width(dockInfo.spaceWidth);
-                child.x(dockInfo.left_x);
+                child.resize({
+                    height:(ch>=dockInfo.spaceHeight)?(ch=dockInfo.spaceWidth):undefined,
+                    width:dockInfo.spaceWidth
+                }).move({
+                    x:dockInfo.left_x,
+                    y:dockInfo.bottom_y
+                });
                 dockInfo.spaceHeight-= ch;
+            }else if(dockPos==="fill"){
+                child.resize({width:dockInfo.spaceWidth,height:dockInfo.spaceHeight});
+                child.move({x:dockInfo.left_x,y:dockInfo.top_y});
             }
+            return false;
         }
         renovate(data?:any,diff?:boolean):IComponent{
-            let oldPrevent = this._preventRefresh;
-            this._preventRefresh = true;
+            let oldPrevent = this._preventEvent;
+            this._preventEvent = true;
             let binders = this._binders;
             if(binders){
                 for(let n in binders){
@@ -912,7 +1146,7 @@ namespace YA{
                 }
             }   
             
-            this._preventRefresh = oldPrevent;
+            this._preventEvent = oldPrevent;
             this.refresh();
             return this;
         }
@@ -954,6 +1188,32 @@ namespace YA{
         }
         return component;
     }
+    export let eventConvertors:{[event:string]:(e:Event)=>IEventArgs} = {};
+    eventConvertors["scroll"] = (e:Event)=>{
+        return {type:"scroll",x:(e.target as HTMLElement).scrollLeft,y:(e.target as HTMLElement).scrollTop} as IEventArgs;
+    };
+    eventConvertors["focus"] = (e:Event)=>({type:"focus"} as IEventArgs);
+    eventConvertors["click"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"click"}));
+    eventConvertors["dblclick"] = (e:Event)=>keyEventConvertor(e,mouseEventConvertor(e,{type:"dblclick"}));
+    eventConvertors["keyup"] = (e:Event)=>keyEventConvertor(e,{type:"keyup"});
+    eventConvertors["keydown"] = (e:Event)=>keyEventConvertor(e,{type:"keydown"});
+    function keyEventConvertor(e:Event,args?:any):IEventArgs{
+        args||(args={});
+        args.altKey = (e as any).altKey;
+        args.ctrlKey = (e as any).ctrlKey;
+        args.shiftKey = (e as any).shiftKey;
+        args.metaKey = (e as any).metaKey;
+        args.code = (e as any).keyCode|| (e as any).which;
+        return args;
+    }
+    function mouseEventConvertor(e:Event,args?:any):IEventArgs{
+        args||(args={});
+        args.x = (e as any).offsetX;
+        args.y = (e as any).offsetY;
+        return args;
+    }
+    
+
     export interface IDockInfo{
         left_x:number;
         right_x:number;
@@ -962,103 +1222,9 @@ namespace YA{
         bottom_y:number;
         spaceHeight:number;
     }
-    export class LayoutComponent extends Component{
-        constructor(){
-            super();
-        }
 
-        _direction:string;
-        direction(value?:string):string|LayoutComponent{
-            if(value===undefined) return this._direction;
-            this._direction = value;
-            return this;
-        }
-
-        refresh():LayoutComponent{
-            if(this._preventRefresh)return this;
-            if(this._direction==="horizontal"){
-                this._layout_horizontal();
-            }else {
-
-            }
-            super.refresh();
-            return this;
-        }
-
-        /**
-         *  水平排版
-         *
-         * @memberof LayoutComponent
-         */
-        private _layout_horizontal(){
-            this.position(true);
-            let width = this.width(true);
-            let height = this.height(true);
-            let components = this._components;
-            let headx = 0;
-            let tailx = width;
-            let usableW = width;
-            let unsets:Array<IComponent>=[];
-            for(let i = 0,j=components.length;i<j;i++){
-                let component = components[i] as IComponent;
-                
-                component.css("position","absolute");
-                component.height(height);
-                let cw:number = component.width(true);
-                if(usableW<=0){
-                    component.visible(false);
-                    break;
-                }
-                if(usableW<cw){
-                    component.width(usableW);
-                    cw = usableW;
-                }
-                usableW-= cw;
-                let dock = component.dock();
-                if(dock==="head"){
-                    component.x(headx);
-                    headx+= cw;
-                    usableW-= cw;
-                }else if(dock==="tail"){
-                    tailx -=cw;
-                    component.x(tailx);
-                    usableW -=cw;
-                }else {
-                    unsets.push(component);
-                }
-            }
-            if(usableW>=0 && unsets.length>0){
-                for(let i=0,j=unsets.length-1;i<j;i++){
-                    let component = components[i] as IComponent;
-                    if(usableW<=0){
-                        component.visible(false);
-                        break;
-                    }
-                    component.position("absolute");
-                    component.height(height);
-                    let cw:number = component.width(true);
-                    if(usableW<cw){
-                        component.width(usableW);
-                        cw = usableW;
-                    }
-                    usableW-= cw;
-                    component.x(headx);
-                    headx+= cw;
-                }
-                let component = unsets[unsets.length-1];
-                if(usableW<=0){
-                    component.visible(false);
-                }else{
-                    component.position("absolute");
-                    component.height(height);
-                    component.width(usableW);
-                    component.x(headx);
-                }
-                
-            }
-            return this;
-        }
-    }
+    
+    
     
 
     export interface IResiseableComponentOpts extends IComponentOpts{

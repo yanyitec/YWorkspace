@@ -6,6 +6,12 @@ declare namespace YA {
     let quoteRegx: RegExp;
     function trim(txt: string): string;
     function delegate(func: Function, self: object, argc?: number): Function;
+    interface IFuncs {
+        (...args: any[]): any;
+        add(handler: any): any;
+        remove(handler: any): any;
+    }
+    function createFuncs(argc?: number, ck?: (handler: any) => Function, eq?: (obj1: any, obj2: any) => boolean): IFuncs;
     class DataPath {
         fromRoot: boolean;
         constructor(path: string);
@@ -28,23 +34,32 @@ declare namespace YA {
     function merge(dest: any, src: any, prop?: string, refs?: Array<any>): any;
     function xable(injectTaget: Function | object, Xable: Function): void;
     interface IEventHandler {
-        (sender: any, eventArgs: any): any;
+        (sender: any, eventArgs: IEventArgs): any;
+    }
+    interface IEventArgs {
+        [key: string]: any;
+        type?: string;
+        src?: any;
+        canceled?: boolean;
     }
     interface IEventCapture {
         handler: IEventHandler;
+        raw: IEventHandler;
         capture: object;
     }
     interface IObservable {
         subscribe(event: string, handler: IEventHandler, capture?: boolean): IObservable;
         unsubscribe(event: string, handler: IEventHandler, capture?: boolean): IObservable;
-        notify(event: string, args: any, sender?: any): IObservable;
+        notify(event: string, args: IEventArgs): IObservable;
+        get_eventHandlers(event: string, addIfNone?: boolean): IFuncs;
     }
     class Observable implements IObservable {
         private _eventMaps;
         constructor(injectTaget?: Function | object);
         subscribe(event: string, handler: IEventHandler, capture?: boolean): IObservable;
         unsubscribe(event: string, handler: IEventHandler, capture?: boolean): IObservable;
-        notify(event: string, args: any, sender?: any): IObservable;
+        notify(event: string, args: IEventArgs): IObservable;
+        get_eventHandlers(event: string, addIfNone?: boolean): IFuncs;
     }
     interface ICompositable {
         name(value?: string): string | ICompositable;
@@ -71,7 +86,31 @@ declare namespace YA {
     }
     function createElement(tagName: string): HTMLElement;
     let getStyle: (obj: HTMLElement, attr: string) => string;
+    let attach: (elem: HTMLElement, event: string, handler: Function) => any;
+    let detech: (elem: HTMLElement, event: string, handler: Function) => any;
     function isInview(element: HTMLElement): boolean;
+    interface IComponentChangeEventArgs {
+        type: string;
+        component: IComponent;
+        index?: number;
+    }
+    interface IPoint {
+        x?: number;
+        y?: number;
+    }
+    interface ISize {
+        width?: number;
+        height?: number;
+    }
+    interface IBox extends IPoint, ISize {
+    }
+    interface IBoxEventArgs {
+        type: string;
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+    }
     interface IComponentOpts {
         name?: string;
         tag?: string;
@@ -84,6 +123,8 @@ declare namespace YA {
             [index: string]: string;
         };
         children?: Array<IComponentOpts>;
+        model?: any;
+        actions?: Function[];
     }
     /**
      * 抽象的组件
@@ -97,8 +138,14 @@ declare namespace YA {
         visible(value?: boolean): boolean | IComponent;
         x(value?: number): number | IComponent;
         y(value?: number): number | IComponent;
+        position(value?: string): string | IComponent;
+        move(args: IPoint | IEventHandler): IComponent;
         width(value?: any): any;
         height(value?: any): any;
+        resize(args: ISize | IEventHandler): IComponent;
+        scrollX(value?: number): number | IComponent;
+        scrollY(value?: number): number | IComponent;
+        scroll(args: IPoint | IEventHandler): IComponent;
         attrs(name: {
             [attrName: string]: string;
         } | string, value?: string): string | IComponent;
@@ -106,7 +153,6 @@ declare namespace YA {
             [name: string]: string;
         }, value?: string): string | IComponent;
         dock(value?: string): string | IComponent;
-        position(value?: string): string | IComponent;
         suspend(handler?: (comp: IComponent) => void): IComponent;
         resume(): IComponent;
         refresh(includeCHildren?: boolean): IComponent;
@@ -117,13 +163,19 @@ declare namespace YA {
         element: HTMLElement;
         private _width;
         private _height;
-        private _percentHeight;
         constructor(element?: string | HTMLElement | IComponentOpts);
-        subscribe: (event: string, handler: IEventHandler, capture?: boolean) => IComponent;
+        get_eventHandlers: (event: string, addIfNone?: boolean) => IFuncs;
+        _bindedEvents: {
+            [event: string]: IFuncs;
+        };
+        subscribe(event: string, handler: IEventHandler, capture?: boolean): IComponent;
         unsubscribe: (event: string, handler: IEventHandler, capture?: boolean) => IComponent;
-        notify(event: string, args: any, sender?: any): IComponent;
+        notify(event: string, args: IEventArgs): IComponent;
         onComponentChanged(event: string, component: IComponent, index?: number): void;
+        componentChange(handler: (sender: IComponent, args: IComponentChangeEventArgs) => any): IComponent;
         protected contentElement(): HTMLElement;
+        _root: IComponent;
+        root(): IComponent;
         private _binders;
         _opts: IComponentOpts;
         opts(opts?: IComponentOpts): IComponent | IComponentOpts;
@@ -133,23 +185,32 @@ declare namespace YA {
         private _disNone;
         private _visible;
         visible(value?: boolean): boolean | IComponent;
+        show(animate?: boolean): void;
         _x: number;
         x(value?: number | boolean): IComponent | number;
         _y: number;
         y(value?: number | boolean): IComponent | number;
+        move(args: IPoint | IEventHandler): IComponent;
+        location(point?: IPoint | string, relative?: string): IPoint | IComponent;
         width(value?: any): any;
         height(value?: any): any;
+        resize(args: ISize | IEventHandler): IComponent;
         position(value?: string | boolean): string | IComponent;
+        scrollX(value?: number): IComponent | number;
+        scrollY(value?: number): IComponent | number;
+        scroll(point: IPoint | IEventHandler): IComponent;
         css(name: string | {
             [name: string]: string;
         }, value?: string): string | IComponent;
+        _opacity: string;
+        opacity(value?: number): number | IComponent;
         attrs(name: string | {
             [attrname: string]: string;
         }, value?: string): string | IComponent;
-        protected _preventRefresh: boolean;
-        suspend(handler?: (comp: IComponent) => void): IComponent;
+        protected _preventEvent: boolean;
+        suspend(handler?: (comp: IComponent) => any): IComponent;
         resume(): IComponent;
-        refresh(includeCHildren?: boolean): IComponent;
+        refresh(includeChildren?: boolean): IComponent;
         private _makeDock(child, dockInfo);
         renovate(data?: any, diff?: boolean): IComponent;
         update(data: any, diff?: boolean): IComponent;
@@ -161,6 +222,9 @@ declare namespace YA {
         [name: string]: Function;
     };
     function component(opts: IComponentOpts, parent?: IComponent | HTMLElement): IComponent;
+    let eventConvertors: {
+        [event: string]: (e: Event) => IEventArgs;
+    };
     interface IDockInfo {
         left_x: number;
         right_x: number;
@@ -168,18 +232,6 @@ declare namespace YA {
         top_y: number;
         bottom_y: number;
         spaceHeight: number;
-    }
-    class LayoutComponent extends Component {
-        constructor();
-        _direction: string;
-        direction(value?: string): string | LayoutComponent;
-        refresh(): LayoutComponent;
-        /**
-         *  水平排版
-         *
-         * @memberof LayoutComponent
-         */
-        private _layout_horizontal();
     }
     interface IResiseableComponentOpts extends IComponentOpts {
         minSize: number;
