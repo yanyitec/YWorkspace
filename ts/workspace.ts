@@ -1,5 +1,5 @@
 
-namespace YA{
+namespace YA1{
     export let trimRegx :RegExp = /(^\s+)|(\s+$)/gi;
     export let intRegx :RegExp = /^\s*(\+\-)?\d+\s*$/;
     export let numberRegx :RegExp = /^\s*(\+\-)?\s*\d+(?:.\d+)\s*$/;
@@ -528,9 +528,9 @@ namespace YA{
 
     export let getStyle = (obj:HTMLElement,attr:string):string =>{
         if((obj as any).currentStyle){//兼容IE
-            getStyle = YA.getStyle = (obj:HTMLElement,attr:string):string=>(obj as any).currentStyle[attr];
+            getStyle = YA1.getStyle = (obj:HTMLElement,attr:string):string=>(obj as any).currentStyle[attr];
         }else{
-            getStyle = YA.getStyle = (obj:HTMLElement,attr:string):string=>{
+            getStyle = YA1.getStyle = (obj:HTMLElement,attr:string):string=>{
                 let f:any = false;
                 return getComputedStyle(obj,f)[attr];
             };
@@ -539,17 +539,17 @@ namespace YA{
     }
     export let attach = (elem:HTMLElement,event:string,handler:Function)=>{
         if(elem.addEventListener){
-            attach = YA.attach = (elem:HTMLElement,event:string,handler:Function)=>elem.addEventListener(event,handler as any,false);
+            attach = YA1.attach = (elem:HTMLElement,event:string,handler:Function)=>elem.addEventListener(event,handler as any,false);
         }else {
-            attach = YA.attach = (elem:HTMLElement,event:string,handler:Function)=>(elem as any).attachEvent("on" +event,handler as any);
+            attach = YA1.attach = (elem:HTMLElement,event:string,handler:Function)=>(elem as any).attachEvent("on" +event,handler as any);
         }
         return attach(elem,event,handler);
     }
     export let detech = (elem:HTMLElement,event:string,handler:Function)=>{
         if(elem.removeEventListener){
-            detech = YA.detech = (elem:HTMLElement,event:string,handler:Function)=>elem.removeEventListener(event,handler as any,false);
+            detech = YA1.detech = (elem:HTMLElement,event:string,handler:Function)=>elem.removeEventListener(event,handler as any,false);
         }else {
-            detech = YA.detech = (elem:HTMLElement,event:string,handler:Function)=>(elem as any).detechEvent("on" +event,handler as any);
+            detech = YA1.detech = (elem:HTMLElement,event:string,handler:Function)=>(elem as any).detechEvent("on" +event,handler as any);
         }
         return detech(elem,event,handler);
     }
