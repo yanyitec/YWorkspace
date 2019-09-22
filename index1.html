@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <script type="text/javascript" src="lib/YA.js"></script>
+        <script type="text/javascript" src="lib/DynamicPage.js"></script>
+        <style type="text/css">
+.validate-error{
+    color:red;
+}
+.validate-success{
+    color:green;
+}
+        </style>
+    </head>
+    <body>
+        
+        
+        <div id="demo"></div>
+        <script>
+var page = new DynamicPage({
+    viewType:"editable",
+    element:document.getElementById("demo")
+});
+page.init();
+
+
+        </script>
+    </body>
+</html>

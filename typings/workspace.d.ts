@@ -1,4 +1,4 @@
-declare namespace YA {
+declare namespace YA1 {
     let trimRegx: RegExp;
     let intRegx: RegExp;
     let numberRegx: RegExp;

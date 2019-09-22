@@ -224,11 +224,18 @@ return funcs;
     export class DPath{
         
         fromRoot:boolean;
-        constructor(pathOrValue:any,isConst?:string){
-            if(isConst==="const"){
+        constructor(pathOrValue:any,type?:string){
+            if(type==="const"){
                 this.getValue = (d)=>pathOrValue;
                 this.setValue = (d,v)=>{
                     if(executionMode===ExecutionModes.Devalopment){console.warn("向一个const的DPath写入了值",this,d,v);}
+                    return this;
+                };
+                return;
+            }else if(type==="dynamic"){
+                this.getValue = (d)=>pathOrValue(d);
+                this.setValue = (d,v)=>{
+                    pathOrValue(d,v);
                     return this;
                 };
                 return;
@@ -345,6 +352,9 @@ return funcs;
         static const(value:any):DPath{
             return new DPath(value,"const");
         }
+        static dymanic(value:Function):DPath{
+            return new DPath(value,"dynamic");
+        }
         static paths:{[name:string]:DPath};
     }
     let DPaths = DPath.paths={};
@@ -411,6 +421,19 @@ return funcs;
         merge(target,srcValue);
         return dest[prop] = target;
 
+    }
+
+    export function deepClone(obj:any):any{
+        if(!obj) return obj;
+        let type = typeof obj;
+        if(type==="object"){
+            let result = isArray(obj)?[]:{};
+            for(let n in obj){
+                result[n] = deepClone(obj[n]);
+            }
+            return result;
+        }
+        return obj;
     }
 
     export interface IAccessor{
@@ -938,6 +961,8 @@ return funcs;
             return this;
         }
 
+        
+
         makeLabelElement(wrapper:HTMLElement,isMarkRequired:boolean):HTMLElement{
             let labelElem = YA.createElement("label") as HTMLLabelElement;
             wrapper.appendChild(labelElem);
@@ -993,15 +1018,10 @@ return funcs;
             return this.path.getValue(this.fieldsetView.getValue());
         }
         setValue(value:any,refresh?:boolean):FieldView{
-            if(this.isReadonly()){
-                if(executionMode===ExecutionModes.Devalopment){
-                    console.warn("给只读字段设置赋值",this,value);
-                }
-                return this;
-            }
+            
             if(refresh!==false)this.dataViewAccessor.setValue(value);
             this.path.setValue(this.fieldsetView.getValue(),value);
-            this.validate(value);
+            if(this.isWritable())this.validate(value);
             return this;
         }
 
@@ -1021,8 +1041,15 @@ return funcs;
             if(value===undefined) value=this.getValue();
             let lng = (txt)=>this.fieldsetView.TEXT(txt);
             let rs = this.field.validate(value,lng,this._fieldViewType==FieldViewTypes.Edit || this._fieldViewType==FieldViewTypes.Cell);
-            if(rs) return rs;
-            if(this.dataViewAccessor.validate) return this.dataViewAccessor.validate(value,lng);
+            
+            if(!rs && this.dataViewAccessor.validate) rs = this.dataViewAccessor.validate(value,lng);
+
+            if(rs){
+                replaceClass(this.element,"validate-error","validate-success");
+            }else {
+                replaceClass(this.element,"validate-success","validate-error");
+            }
+            return rs;
         }
 
         isWritable(){
@@ -1089,19 +1116,20 @@ return funcs;
     };
 
     export let fieldDataViewCreators :{[type:string]:(field:Field,fieldView:FieldView)=>IFieldViewAccessor}  = {};
-    function makeInputAccessor(inputElement:HTMLInputElement){
+    function makeInputAccessor(inputElement:HTMLInputElement,isReadonly?:boolean){
         let tick;
         
         return {
             element :inputElement,
-            getValue:()=>inputElement.value,
-            setValue:(value)=>inputElement.value = value,
+            getValue:()=>isReadonly?inputElement.innerHTML:inputElement.value,
+            setValue:(value)=>{if(isReadonly)inputElement.innerHTML=value;else inputElement.value = value;},
             valuechange:(handler:(value)=>any)=>{
+                if(isReadonly) return;
+                let immidiate = ()=>{tick=0;handler(inputElement.value);};
                 let newTick = ()=>{
                     if(tick) clearTimeout(tick);
-                    tick = setTimeout(() =>{handler(inputElement.value);tick=0;}, 200);
+                    tick = setTimeout(immidiate, 200);
                 };
-                let immidiate = ()=>{tick=0;handler(inputElement.value);};
                 attach(inputElement,"keyup",newTick);
                 attach(inputElement,"keydown",newTick);
                 attach(inputElement,"blur",immidiate);
@@ -1110,34 +1138,99 @@ return funcs;
         };
     }
     fieldDataViewCreators.text = (field:Field,fieldView:FieldView):IFieldViewAccessor =>{
+        if(fieldView.isReadonly()){
+            let span = YA.createElement("SPAN");
+            span.innerHTML = fieldView.getValue();
+            return makeInputAccessor(span as HTMLInputElement,true);
+        }
         let inputElement = YA.createElement("input") as HTMLInputElement;
         inputElement.type = "text";
         return makeInputAccessor(inputElement);
     };
 
     fieldDataViewCreators.textarea = (field:Field,fieldView:FieldView):IFieldViewAccessor =>{
+
+        if(fieldView.isReadonly()){
+            let span = YA.createElement("div");
+            span.innerHTML = fieldView.getValue();
+            return makeInputAccessor(span as HTMLInputElement,true);
+        }
+
         let inputElement = YA.createElement("textarea") as HTMLInputElement;
         return makeInputAccessor(inputElement);
     };
     
     fieldDataViewCreators.dropdown = (field:Field,fieldView:FieldView):IFieldViewAccessor =>{
-        let inputElement = YA.createElement("select") as HTMLSelectElement;
+        let readonly = fieldView.isReadonly();
+
+        let inputElement = readonly?YA.createElement("span") as HTMLSelectElement:YA.createElement("select") as HTMLSelectElement;
+        inputElement.value = fieldView.getValue();
         let ddOpts = field.opts as IDropdownFieldOpts;
         let keypath = DPath.fetch(ddOpts.itemKey||"Id");
-        let textpath = DPath.fetch(ddOpts.itemText||"Name");
+        let textpath = DPath.fetch(ddOpts.itemText||"Text");
         let items :any[];
         let itemsOpt = ddOpts.items;
+
+        function makeItems(items){
+            
+            if(readonly){
+                let key = fieldView.getValue();
+                for(let i=0,j=items.length;i<j;i++){
+                    let item = items[i];
+                    let id= keypath.getValue(item);
+                    if(id==key){
+                        inputElement.innerHTML = textpath.getValue(item);
+                        (inputElement as any).__YA_SELECTITEM = item;
+                        break;
+                    }
+                }
+                inputElement.innerHTML = "";
+            }else {
+                buildSelectOptions(inputElement,items||[],keypath,textpath,fieldView.fieldsetView.TEXT(ddOpts.noSelectedText||"请选择..."));
+            }
+        }
         if(itemsOpt.url){
             let ajaxOpts = itemsOpt as IAjaxOpts;
-            buildSelectOptions(inputElement,[],keypath,textpath,field.fieldset.TEXT("加载中..."))
+            if(readonly){
+                inputElement.innerHTML = fieldView.fieldsetView.TEXT("加载中...");
+            }else {
+                buildSelectOptions(inputElement,[],keypath,textpath,fieldView.fieldsetView.TEXT("加载中..."));
+               
+            }
             YA.ajax(ajaxOpts).then((value)=>{
-                buildSelectOptions(inputElement,value||[],keypath,textpath,field.fieldset.TEXT(ddOpts.noSelectedText));
+                items = value;
+                makeItems(value);
+                
             });
+            
         }else if(isArray(itemsOpt)){
-            buildSelectOptions(inputElement,itemsOpt,keypath,textpath,ddOpts.noSelectedText);
+            items = itemsOpt;
+            makeItems(itemsOpt);
         }
 
-        let tick;
+        if(readonly){
+            return {
+                element:inputElement,
+                getValue:()=>ddOpts.isObjectValue?(inputElement as any).__YA_SELECTITEM:keypath.getValue((inputElement as any).__YA_SELECTITEM),
+                setValue:(value)=>{
+                    let key = value;
+                    if(isObject(value)){
+                        key = keypath.getValue(value);
+                    }
+                    for(let i=0,j=items.length;i<j;i++){
+                        let item = items[i];
+                        let id= keypath.getValue(item);
+                        if(id==value){
+                            inputElement.innerHTML = textpath.getValue(item);
+                            (inputElement as any).__YA_SELECTITEM = item;
+                            break;
+                        }
+                    }
+                    inputElement.innerHTML="";
+                },
+                valuechange:(handler)=>{}
+            };
+        }
         return {
             element :inputElement,
             getValue:()=>{
@@ -1184,6 +1277,7 @@ return funcs;
             let option = YA.createElement("option") as HTMLOptionElement;
             option.value=keypath.getValue(item);option.text = textpath.getValue(item);
             (option as any).__YA_SELECTITEM = item;
+            select.appendChild(option);
         }
     }
 
@@ -1197,20 +1291,90 @@ return funcs;
     }
     export interface IFieldsetViewOpts extends IFieldsetOpts{
         //layoutName?:string;
+        element?:HTMLElement;
         fieldsetViewType : FieldsetViewTypes|string;
         fields:{[name:string]:IFieldViewOpts};
         fieldset?:Fieldset;
-        primaryField?:Field;
-        data?:any;
-        /**
-         * list状态下选中的Id
-         *
-         * @type {any[]}
-         * @memberof IFieldsetViewOpts
-         */
-        selectedIds?:any[];
+        
     }
+
     export class FieldsetView{
+        opts:IFieldsetViewOpts;
+        name:string;
+        fieldset:Fieldset;
+        fieldviews:FieldView[];
+        fieldsetViewType:FieldsetViewTypes;
+        element:HTMLElement;
+        selectedIds:any[];
+        constructor(opts:IFieldsetViewOpts){
+            this.opts = opts;
+            this.element = opts.element;
+            this.fieldset = opts.fieldset;
+            this.fieldsetViewType =  (typeof opts.fieldsetViewType==="string") ? FieldsetViewTypes[opts.fieldsetViewType as string] : opts.fieldsetViewType;
+            this._makeDetailElement(this.name);
+            
+        }
+
+
+        _makeDetailElement(layoutName:string){
+            let fields = this.opts.fields;
+            this.fieldviews=[];
+            let elem = this.element || YA.createElement("div");
+            elem.innerHTML = "";
+            elem.className = "fieldset " + (layoutName||"");
+            
+            
+            
+            for(let name in fields){
+                let fieldOpts:IFieldViewOpts = fields[name];
+                if(fieldOpts.accessPermission=== AccessPermissions.Denied) continue;
+                if(layoutName!==undefined){
+                    let layout = fieldOpts.layout||"";
+                    if(layout!==layoutName) continue;
+                }   
+                if(!fieldOpts.name) fieldOpts.name = name;
+                //let restoredType = fieldOpts.feildViewType;
+                let fieldView = new FieldView(fieldOpts,this);
+                this.fieldviews.push(fieldView);
+                elem.appendChild(fieldView.element);
+                
+                
+            }
+            
+        }
+        
+        _data:any;
+
+        TEXT(txt:string):string{
+            return txt;
+        }
+        
+        getValue():any{
+            return this._data||(this._data={});
+        }
+
+        setValue(value:any):FieldsetView{
+            let data = this._data = value ||{};
+            for(let name in this.fieldviews){
+                let fieldview = this.fieldviews[name];
+                fieldview.refresh();
+            }
+            return this;
+        }
+
+        validate(){
+            let rs:{[index:string]:string};
+            let hasError = false;
+            for(let i in this.fieldviews){
+                let fieldview = this.fieldviews[i];
+                let fieldValid = fieldview.validate();
+                if(fieldValid){if(!rs)rs={}; rs[fieldview.field.name] = fieldValid; hasError=true;}
+            }
+            return rs;
+        }
+    }
+    /*
+    export class FieldsetViewx{
         opts:IFieldsetViewOpts;
         name:string;
         primaryField:Field;
@@ -1222,12 +1386,12 @@ return funcs;
         selectedIds:any[];
         constructor(opts:IFieldsetViewOpts){
             this.opts = opts;
-            this._data = opts.data;
+            
             this.name = opts.name || "";
             this.fieldsetViewType = (typeof opts.fieldsetViewType==="string") ? FieldsetViewTypes[opts.fieldsetViewType as string] : opts.fieldsetViewType;
-            this.fieldsetViewType = FieldsetViewTypes.Detail;
+            //this.fieldsetViewType = FieldsetViewTypes.Detail;
             this.fieldset = opts.fieldset;
-            this.selectedIds = opts.selectedIds;
+            //this.selectedIds = opts.selectedIds;
             this._makeElement(this.name);
         }
 
@@ -1305,7 +1469,7 @@ return funcs;
             return this._data;
         }
 
-        setValue(value:any):FieldsetView{
+        setValue(value:any):FieldsetViewx{
             let data = this._data = value ||{};
             for(let name in this.fieldviews){
                 let fieldview = this.fieldviews[name];
@@ -1313,8 +1477,8 @@ return funcs;
             }
             return this;
         }
-    }
-
+    }*/
+/*
     export enum FieldPanelTypes{
         Detail,
         Edit,
@@ -1330,7 +1494,10 @@ return funcs;
     export interface IFieldPanelOpts extends IFieldsetViewOpts{
         fieldPanelType?:FieldPanelTypes | string;
         data?:any;
-        pageSize?:number;
+        pageSize?:number|string;
+        items?:any[]|string;
+        detail?:any|string;
+        filter?:any|string;
     }
 
     
@@ -1338,13 +1505,23 @@ return funcs;
     export class FieldPanel{
         opts:IFieldPanelOpts;
         _data:any;
-        total:number;
+        _total:number;
+        _items:any[];
+        
+        layouts:{[name:string]:any};
+
+        detailPath:DPath;
+        filterPath:DPath;
+        itemsPath:DPath;
+        pageSizePath:DPath;
+        totalPath:DPath;
+
         //itemOpts:IFieldsetViewOpts;
         element:HTMLElement;
         fieldPanelType:FieldPanelTypes;
-        headView:FieldsetView;
-        fieldsetViews:{[name:string]:FieldsetView};
-        fieldsetView:FieldsetView;
+        //headView:FieldsetView;
+        //fieldsetViews:{[name:string]:FieldsetView};
+        //fieldsetView:FieldsetView;
         isCollection:boolean;
         constructor(opts:IFieldPanelOpts){
             this.opts = opts;
@@ -1354,16 +1531,57 @@ return funcs;
                 this.opts.fieldsetViewType = FieldsetViewTypes.Row;
                 this.isCollection = true;
             }else this.opts.fieldsetViewType = FieldsetViewTypes[FieldPanelTypes[this.fieldPanelType]];
+            let fields = opts.fields;
+            let layouts:{[name:string]:boolean} = {};
+            for(let name in fields){
+                let fieldOpts:IFieldViewOpts = fields[name];
+                if(fieldOpts.accessPermission=== AccessPermissions.Denied || fieldOpts.accessPermission=== AccessPermissions.Hidden) continue;
+                layouts[fieldOpts.layout||""] = true;
+            }
+            this.makeElement();
         }
 
-        makeElement(){
-            let element :HTMLElement;
-            if(this.element) (element =this.element).innerHTML = "";
-            else this.element = element = YA.createElement("div");
-            
-            if(this.fieldPanelType== FieldPanelTypes.Detail || this.fieldPanelType == FieldPanelTypes.Edit){
-                this.fieldsetView = new FieldsetView();
+        pageSize(value?:number):number|FieldPanel{
+            if(!this.pageSizePath){
+                if(typeof this.opts.pageSize==="string"){
+                    this.pageSizePath = DPath.fetch(this.opts.pageSize);
+                }else {
+                    this.pageSizePath = DPath.const(this.opts.pageSize);
+                }
             }
+            if(value===undefined){
+                return this.pageSizePath.getValue(this._data);
+            }
+            throw "Not Implement";
+        }
+
+        items(value?:any[]):number|FieldPanel{
+            if(!this.itemsPath){
+                if(typeof this.opts.pageSize==="string"){
+                    this.pageSizePath = DPath.fetch(this.opts.pageSize);
+                }else {
+                    this.pageSizePath = DPath.const(this.opts.pageSize);
+                }
+            }
+            if(value===undefined){
+                return this.pageSizePath.getValue(this._data);
+            }
+            throw "Not Implement";
+        }
+        
+        makeElement(){
+            //let element :HTMLElement;
+            //if(this.element) (element =this.element).innerHTML = "";
+            //else this.element = element = YA.createElement("div");
+            //this.fieldsetViews = {};
+            //if(this.fieldPanelType== FieldPanelTypes.Detail || this.fieldPanelType == FieldPanelTypes.Edit){
+            //    for(let n in this.layouts){
+            //        let name = this.opts.name;this.opts.name = n;
+             //       this.fieldsetView = this.fieldsetViews[n] = new FieldsetView(this.opts);
+            //        this.opts.name = name;
+            //        this.element.appendChild(this.fieldsetView.element);
+            //    }
+            //}
         }
 
         makeTableElement(layoutName:string){
@@ -1395,7 +1613,184 @@ return funcs;
                 }
             }
         }
+
+        getValue():any{
+            return this._data;
+        }
+
+        setValue(value:any):FieldPanel{
+            let data = this._data = value ||{};
+            for(let name in this.fieldsetViews){
+                let fieldsetview = this.fieldsetViews[name];
+                fieldsetview.setValue(value);
+            }
+            return this;
+        }
+    }*/
+
+    export interface ILayout{
+        
+        appendElement(lyname:string,element?:HTMLElement):Element;
+
+        /**
+         * 查找布局元素
+         *
+         * @param {string} lyName
+         * @param {boolean} [noUseCache]
+         * @memberof ILayoutMaster
+         */
+        findElement(lyName:string,noUseCache?:boolean);
+
+        /**
+         * 清空布局元素
+         *
+         * @param {string} [lyName]
+         * @memberof ILayoutMaster
+         */
+        clearElement(lyName?:string);
+
+        /**
+         * 找到/新添布局元素
+         *
+         * @param {string} lyName
+         * @param {boolean} [noUseCache]
+         * @memberof ILayoutMaster
+         */
+        sureElement(lyName:string,noUseCache?:boolean);
+
+        
+    }
+    /*
+    class LayoutCache{
+        name:string;
+        element:HTMLElement;
+        paths:string[];
     }
 
+    export class Layout {
+        opts:any;
+        element:HTMLElement;
+        _caches:{[name:string]:LayoutCache};
+        protected _appendLayoutElement:(parentLayoutElement:HTMLElement,currName:string,num:number,fullpath:string)=>any;
+        //_layoutPaths:{[name:string]:string[]};
+        constructor(opts:any){
+            this.element = opts.element;
+            this._appendLayoutElement = opts.appendLayoutElement;
+            if(!this._appendLayoutElement) this._appendLayoutElement = (p:HTMLElement,currName:string,num:number,fullpath:string):any=>{
+                let currLayout = YA.createElement("div");
+                p.appendChild(currLayout);
+                return currLayout;
+            };
+        }
+        getCache(pathstr:string):LayoutCache{
+            let caches = this._caches ||(this._caches={});
+            let cached :LayoutCache = caches[pathstr];
+            cached.paths = pathstr.split("->");
+            return cached;
+        }
+        appendElement(lyname:string,element:HTMLElement):HTMLElement{
+            return null;
+        }
+        findElement(lyName:string,notUseCache?:boolean):HTMLElement{
+            let cached = this._caches[lyName];
+            if(notUseCache===true || !cached.element) {
+                return this._findElement(this.element,cached.paths);
+            }
+            let elem = cached.element;
+            if(notUseCache===false) return elem;
+            if(this._checkIn(this.element,elem)) return elem;
+        }
+        clearELement(lyName?:string) : Layout{
+            if(lyName===undefined){
+                this.element.innerHTML = "";
+                return this;
+            }
+            let elem = this.findElement(lyName);
+            if(elem) elem.innerHTML="";
+            return this;
+        } 
+        sureElement(lyName:string,notUseCache?:boolean){
+            let cached = this._caches[lyName];
+            let elem :HTMLElement;
+            
+            if(notUseCache===true) {
+                elem = cached.element = this._findElement(this.element,cached.paths);
+            }else elem = cached.element;
+            
+            if(elem) return elem;
+            
+            let paths = cached.paths;
+            
+            let curr=this.element;
+            let subpath = "";
+            for(let i =0,j=paths.length;i<j;i++){
+                let path = paths[i];
+                let elem = this._findChildren(curr,path);
+                if(elem){
+                    curr = elem;
+                    continue;
+                }
+                if(!curr) {
+                    curr= this._appendLayoutElement(curr,path,i,cached.name);
+                    curr.setAttribute("layout-name",path);
+                    
+                    let subpaths = [];
+                    for(let m=1,n=i;m<n;m++){
+                        subpaths.push(paths[m]);
+                    }
+                    this._caches[subpath]={
+                        name:subpaths.join("->"),
+                        paths :subpaths,
+                        element:curr
+                    };
+                }
+            }
+            return curr;
+        }
+        _findChildren(element:HTMLElement,name:string){
+            for(let i =0,j=element.childNodes.length;i<j;i++){
+                let child = element.childNodes[i] as HTMLElement;
+                if(child.hasChildNodes) continue;
+                let lyName = child.getAttribute("layout-name");
+                if(lyName===name) {
+                    return child;
+                } else{
+                    let rs = this._findChildren(child,name);
+                    if(rs) return rs;
+                }
+            }
+            
+        }
+        _findElement(element:HTMLElement,paths:string[]){
+            let name = paths.shift();
+            let rs = this._findChildren(element,name);
+            if(rs){
+                let elem = this._findElement(rs,paths);
+                paths.push(name);
+                return elem;
+            }else {
+                paths.push(name);
+            }
+        }
+        _checkIn(root:HTMLElement,element:HTMLElement){
+            while(element){
+                element = element.parentNode as HTMLElement;
+                if(element===root) return true;
+            }
+            return false;
+        }
+    }
+
+    export class TableRowLayout extends Layout{
+        constructor(opts:any){
+            super(opts);
+            this._appendLayoutElement = (p:HTMLElement,currName:string,num:number,fullpath:string):any=>{
+                let currLayout = YA.createElement("TD");
+                p.appendChild(currLayout);
+                return currLayout;
+            };
+        }
+
+    }*/
     
 }
